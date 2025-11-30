@@ -1,0 +1,10 @@
+streamlit>=1.20
+pandas>=1.5
+numpy
+matplotlib
+seaborn
+scikit-learn
+statsmodels
+joblib
+nbformat
+nbconvert
