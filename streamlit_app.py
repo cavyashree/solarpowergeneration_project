@@ -1,128 +1,222 @@
+
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import math
+import joblib
+import io
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-# ---------------------------------------------------------------
-# PAGE SETTINGS
-# ---------------------------------------------------------------
-st.set_page_config(
-    page_title="Solar Power Dashboard",
-    layout="wide",
-    page_icon="🔆",
+# -------------------------
+# Page config
+# -------------------------
+st.set_page_config(page_title="Solar Capacity Predictor", layout="wide", page_icon="🔆")
+st.title("Solar Capacity Predictor (Estimate power-generated)")
+
+# -------------------------
+# Load data
+# -------------------------
+@st.cache_data(show_spinner=False)
+def load_data(path="solarpower.csv"):
+    return pd.read_csv(path)
+
+try:
+    df = load_data()
+except FileNotFoundError:
+    st.warning("No 'solarpower.csv' found in repo root. Upload it below.")
+    uploaded = st.file_uploader("Upload solarpower.csv", type=["csv"])
+    if uploaded:
+        df = pd.read_csv(uploaded)
+    else:
+        st.stop()
+
+# Check target
+TARGET = "power-generated"
+if TARGET not in df.columns:
+    st.error(f"Target column '{TARGET}' not found in dataset. Make sure CSV contains this column.")
+    st.stop()
+
+# -------------------------
+# Prepare features (numeric only)
+# -------------------------
+num_df = df.select_dtypes(include=[np.number]).copy()
+
+# drop any non-numeric we won't use
+if TARGET not in num_df.columns:
+    st.error(f"Numeric target column '{TARGET}' missing.")
+    st.stop()
+
+X_all = num_df.drop(columns=[TARGET], errors='ignore')
+y_all = num_df[TARGET]
+
+if X_all.shape[1] == 0:
+    st.error("No numeric input features found to train model.")
+    st.stop()
+
+# -------------------------
+# Sidebar: options
+# -------------------------
+st.sidebar.header("Model options")
+model_type = st.sidebar.selectbox("Model", ["RandomForest", "Ridge (linear)"])
+test_size = st.sidebar.slider("Test set fraction", 0.05, 0.4, 0.2, 0.05)
+random_state = st.sidebar.number_input("Random seed", value=42, step=1)
+do_scale = st.sidebar.checkbox("Scale numeric features (StandardScaler)", value=False)
+n_estimators = st.sidebar.slider("RF n_estimators", 10, 500, 150, step=10) if model_type == "RandomForest" else None
+
+st.sidebar.markdown("---")
+st.sidebar.write("Tip: If dataset has missing values, the app will impute medians automatically.")
+
+# -------------------------
+# Train model (cached)
+# -------------------------
+@st.cache_data(show_spinner=False)
+def train_model(X, y, model_type="RandomForest", test_size=0.2, random_state=42, do_scale=False, n_estimators=150):
+    # Impute missing numeric values with median inside pipeline
+    imputer = SimpleImputer(strategy="median")
+    steps = [("impute", imputer)]
+    if do_scale:
+        steps.append(("scale", StandardScaler()))
+    # choose estimator
+    if model_type == "RandomForest":
+        estimator = RandomForestRegressor(n_estimators=n_estimators, random_state=random_state)
+    else:
+        estimator = Ridge(random_state=random_state)
+    steps.append(("estimator", estimator))
+
+    pipe = Pipeline(steps)
+
+    # Drop rows where y is NA
+    mask = y.notna()
+    X_valid = X.loc[mask].reset_index(drop=True)
+    y_valid = y.loc[mask].reset_index(drop=True)
+
+    if X_valid.shape[0] < 10:
+        return None
+
+    X_train, X_test, y_train, y_test = train_test_split(X_valid, y_valid, test_size=test_size, random_state=random_state)
+
+    pipe.fit(X_train, y_train)
+    preds = pipe.predict(X_test)
+    mae = mean_absolute_error(y_test, preds)
+    from math import sqrt
+    mse = mean_squared_error(y_test, preds)
+    rmse = sqrt(mse)
+    r2 = r2_score(y_test, preds)
+
+    # feature importances for RF, coefficients for linear
+    feature_names = X.columns.tolist()
+    if model_type == "RandomForest":
+        # extract feature_importances_ from final estimator
+        importances = pipe.named_steps["estimator"].feature_importances_
+    else:
+        importances = pipe.named_steps["estimator"].coef_
+        # coef_ may be shorter or same length; convert to absolute importances
+        importances = np.abs(importances)
+
+    feat_imp = pd.DataFrame({"feature": feature_names, "importance": importances}).sort_values("importance", ascending=False)
+
+    return {
+        "pipeline": pipe,
+        "metrics": {"mae": float(mae), "rmse": float(rmse), "r2": float(r2)},
+        "feat_imp": feat_imp,
+        "X_test_head": X_test.head(5),
+        "y_test_head": y_test.head(5)
+    }
+
+train_res = train_model(X_all, y_all, model_type=model_type, test_size=test_size, random_state=random_state, do_scale=do_scale, n_estimators=n_estimators)
+if train_res is None:
+    st.error("Not enough data to train the model (need at least ~10 rows with target).")
+    st.stop()
+
+pipe = train_res["pipeline"]
+metrics = train_res["metrics"]
+feat_imp = train_res["feat_imp"]
+
+# -------------------------
+# Layout: left inputs, right results
+# -------------------------
+left, right = st.columns([1, 2])
+
+with left:
+    st.markdown("## User Input Parameters")
+    st.write("Change the values and press **Predict** on the right.")
+    # create input widgets for each feature used by model
+    user_inputs = {}
+    for col in X_all.columns:
+        # if a feature has few unique values, show a selectbox
+        unique_vals = X_all[col].dropna().unique()
+        if len(unique_vals) <= 10 and len(unique_vals) > 1:
+            opts = sorted(unique_vals.tolist())
+            # pick median-like default
+            default_idx = len(opts) // 2
+            user_inputs[col] = st.selectbox(col, options=opts, index=default_idx, key=f"sel_{col}")
+        else:
+            default = float(X_all[col].median()) if not X_all[col].isnull().all() else 0.0
+            user_inputs[col] = st.number_input(col, value=default, format="%.6f", key=f"num_{col}")
+
+    st.markdown("---")
+    st.caption("Inputs are used by the trained model to estimate solar capacity (power-generated).")
+
+with right:
+    st.markdown("<h1 style='margin-bottom:6px;'>Model Deployment: Solar Capacity Prediction</h1>", unsafe_allow_html=True)
+    st.markdown("#### User Input parameters")
+    st.table(pd.DataFrame([user_inputs]))
+
+    # Predict button
+    if st.button("Predict Estimated Solar Capacity"):
+        # build dataframe in same order
+        sample = pd.DataFrame({c: [user_inputs[c]] for c in X_all.columns})
+        try:
+            pred = pipe.predict(sample)[0]
+            st.markdown("### Predicted Solar Capacity (power-generated)")
+            st.success(f"**{pred:.2f}**  (units)")
+            # pseudo-probability scaling: scale pred relative to observed range for UI
+            y_min = float(y_all.min())
+            y_max = float(y_all.max())
+            if y_max > y_min:
+                conf = (pred - y_min) / (y_max - y_min)
+                conf = float(max(0.0, min(1.0, conf)))
+            else:
+                conf = 0.0
+            # show probability-like two-column table (matches example look)
+            prob_df = pd.DataFrame({"0": [round(1 - conf, 4)], "1": [round(conf, 4)]}, index=["Probability"])
+            st.markdown("#### Prediction Probability (scaled)")
+            st.table(prob_df)
+
+            # show model metrics
+            st.markdown("#### Model performance (test set)")
+            st.write(f"- MAE: {metrics['mae']:.2f}")
+            st.write(f"- RMSE: {metrics['rmse']:.2f}")
+            st.write(f"- R²: {metrics['r2']:.3f}")
+
+            # show feature importances
+            st.markdown("#### Feature Importances")
+            st.dataframe(feat_imp.reset_index(drop=True).head(10), use_container_width=True)
+
+        except Exception as e:
+            st.error("Prediction failed: " + str(e))
+    else:
+        st.info("Click **Predict Estimated Solar Capacity** to run the model on your inputs.")
+
+    st.markdown("---")
+    # Download trained model
+    st.markdown("### Download trained model")
+    buf = io.BytesIO()
+    # Windows-safe model download
+buffer = io.BytesIO()
+joblib.dump(pipe, buffer)
+buffer.seek(0)
+
+st.download_button(
+    label="Download model (.joblib)",
+    data=buffer,
+    file_name="solar_model.joblib",
+    mime="application/octet-stream"
 )
-
-# ---------------------------------------------------------------
-# CUSTOM CSS FOR BEAUTIFUL UI
-# ---------------------------------------------------------------
-st.markdown("""
-    <style>
-        .big-font {
-            font-size:22px !important;
-        }
-        .metric-card {
-            background: linear-gradient(135deg, #f9d976, #f39f86);
-            padding: 20px;
-            border-radius: 12px;
-            color: black;
-            text-align: center;
-            font-weight: bold;
-            box-shadow: 0px 4px 8px rgba(0,0,0,0.2);
-        }
-        .section-header {
-            font-size:28px;
-            font-weight:bold;
-            padding:10px 0px;
-            color:#FF8C00;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-
-# ---------------------------------------------------------------
-# TITLE
-# ---------------------------------------------------------------
-st.markdown("<h1 style='text-align:center;'>🔆 Solar Power Generation Dashboard</h1>", unsafe_allow_html=True)
-st.write("### A clean and interactive dashboard for analyzing solar power data.")
-
-
-# ---------------------------------------------------------------
-# LOAD DATA
-# ---------------------------------------------------------------
-@st.cache_data
-def load_data():
-    df = pd.read_csv("solarpower.csv")
-    return df
-
-df = load_data()
-
-st.divider()
-
-# ---------------------------------------------------------------
-# SUMMARY CARDS
-# ---------------------------------------------------------------
-st.markdown("<div class='section-header'> Key Dataset Metrics</div>", unsafe_allow_html=True)
-
-col1, col2, col3, col4 = st.columns(4)
-
-col1.markdown(f"<div class='metric-card'> Total Rows<br>{df.shape[0]}</div>", unsafe_allow_html=True)
-col2.markdown(f"<div class='metric-card'> Total Columns<br>{df.shape[1]}</div>", unsafe_allow_html=True)
-col3.markdown(f"<div class='metric-card'> Missing Values<br>{df.isnull().sum().sum()}</div>", unsafe_allow_html=True)
-col4.markdown(f"<div class='metric-card'> Numeric Columns<br>{len(df.select_dtypes(include=['float64','int64']).columns)}</div>", unsafe_allow_html=True)
-
-st.divider()
-
-
-# ---------------------------------------------------------------
-# DATA PREVIEW
-# ---------------------------------------------------------------
-st.markdown("<div class='section-header'> Dataset Preview</div>", unsafe_allow_html=True)
-st.dataframe(df.head(10), use_container_width=True)
-
-st.divider()
-
-
-# ---------------------------------------------------------------
-# MISSING VALUES
-# ---------------------------------------------------------------
-st.markdown("<div class='section-header'> Missing Values</div>", unsafe_allow_html=True)
-st.write(df.isnull().sum())
-
-st.divider()
-
-
-# ---------------------------------------------------------------
-# SUMMARY STATISTICS
-# ---------------------------------------------------------------
-st.markdown("<div class='section-header'> Summary Statistics</div>", unsafe_allow_html=True)
-st.write(df.describe())
-
-st.divider()
-
-
-# ---------------------------------------------------------------
-# PLOT SECTION
-# ---------------------------------------------------------------
-st.markdown("<div class='section-header'> Visual Analysis</div>", unsafe_allow_html=True)
-
-numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
-
-if len(numeric_cols) > 0:
-    selected_col = st.selectbox("Select a numeric column to plot:", numeric_cols)
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(df[selected_col], color="orange")
-    ax.set_title(f"{selected_col} Over Time", fontsize=14)
-    ax.set_xlabel("Index")
-    ax.set_ylabel(selected_col)
-    st.pyplot(fig)
-
-else:
-    st.warning("No numeric columns available for plotting.")
-
-st.divider()
-
-# ---------------------------------------------------------------
-# FOOTER
-# ---------------------------------------------------------------
-st.markdown("<h4 style='text-align:center; color:gray;'> Solar Dashboard • Designed with ❤️ using Streamlit</h4>", unsafe_allow_html=True)
-
