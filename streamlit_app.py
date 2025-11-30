@@ -60,14 +60,14 @@ st.divider()
 # ---------------------------------------------------------------
 # SUMMARY CARDS
 # ---------------------------------------------------------------
-st.markdown("<div class='section-header'>📌 Key Dataset Metrics</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-header'> Key Dataset Metrics</div>", unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns(4)
 
-col1.markdown(f"<div class='metric-card'>📄 Total Rows<br>{df.shape[0]}</div>", unsafe_allow_html=True)
-col2.markdown(f"<div class='metric-card'>🔢 Total Columns<br>{df.shape[1]}</div>", unsafe_allow_html=True)
-col3.markdown(f"<div class='metric-card'>📉 Missing Values<br>{df.isnull().sum().sum()}</div>", unsafe_allow_html=True)
-col4.markdown(f"<div class='metric-card'>📊 Numeric Columns<br>{len(df.select_dtypes(include=['float64','int64']).columns)}</div>", unsafe_allow_html=True)
+col1.markdown(f"<div class='metric-card'> Total Rows<br>{df.shape[0]}</div>", unsafe_allow_html=True)
+col2.markdown(f"<div class='metric-card'> Total Columns<br>{df.shape[1]}</div>", unsafe_allow_html=True)
+col3.markdown(f"<div class='metric-card'> Missing Values<br>{df.isnull().sum().sum()}</div>", unsafe_allow_html=True)
+col4.markdown(f"<div class='metric-card'> Numeric Columns<br>{len(df.select_dtypes(include=['float64','int64']).columns)}</div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -75,7 +75,7 @@ st.divider()
 # ---------------------------------------------------------------
 # DATA PREVIEW
 # ---------------------------------------------------------------
-st.markdown("<div class='section-header'>📁 Dataset Preview</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-header'> Dataset Preview</div>", unsafe_allow_html=True)
 st.dataframe(df.head(10), use_container_width=True)
 
 st.divider()
@@ -84,7 +84,7 @@ st.divider()
 # ---------------------------------------------------------------
 # MISSING VALUES
 # ---------------------------------------------------------------
-st.markdown("<div class='section-header'>🧹 Missing Values</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-header'> Missing Values</div>", unsafe_allow_html=True)
 st.write(df.isnull().sum())
 
 st.divider()
@@ -93,7 +93,7 @@ st.divider()
 # ---------------------------------------------------------------
 # SUMMARY STATISTICS
 # ---------------------------------------------------------------
-st.markdown("<div class='section-header'>📊 Summary Statistics</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-header'> Summary Statistics</div>", unsafe_allow_html=True)
 st.write(df.describe())
 
 st.divider()
@@ -102,7 +102,7 @@ st.divider()
 # ---------------------------------------------------------------
 # PLOT SECTION
 # ---------------------------------------------------------------
-st.markdown("<div class='section-header'>📈 Visual Analysis</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-header'> Visual Analysis</div>", unsafe_allow_html=True)
 
 numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns
 
@@ -124,4 +124,5 @@ st.divider()
 # ---------------------------------------------------------------
 # FOOTER
 # ---------------------------------------------------------------
-st.markdown("<h4 style='text-align:center; color:gray;'>🌞 Solar Dashboard • Designed with ❤️ using Streamlit</h4>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align:center; color:gray;'> Solar Dashboard • Designed with ❤️ using Streamlit</h4>", unsafe_allow_html=True)
+
